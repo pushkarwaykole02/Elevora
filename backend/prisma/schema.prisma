@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model career_paths {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                 String            @unique
+  slug                 String            @unique
+  description          String
+  short_description    String?
+  skills               String[]          @default([])
+  tools                String[]          @default([])
+  projects             String[]          @default([])
+  timeline_0_6_months  String?
+  timeline_6_12_months String?
+  created_at           DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime?         @default(now()) @db.Timestamptz(6)
+  career_weights       career_weights?
+  recommendations      recommendations[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model career_weights {
+  id                        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  career_path_id            String       @unique @db.Uuid
+  weight_coding             Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_math_stats         Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_design_creativity  Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_data_analysis      Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_business_finance   Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_programming_skills Decimal?     @default(0.0) @db.Decimal(3, 2)
+  weight_project_experience Decimal?     @default(0.0) @db.Decimal(3, 2)
+  created_at                DateTime?    @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime?    @default(now()) @db.Timestamptz(6)
+  career_paths              career_paths @relation(fields: [career_path_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([career_path_id], map: "idx_career_weights_career_path_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model recommendations {
+  id                         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                    String           @db.Uuid
+  assessment_id              String           @db.Uuid
+  recommended_career_path_id String           @db.Uuid
+  match_score                Decimal          @db.Decimal(5, 2)
+  score_breakdown            Json?            @default("{}")
+  top_contributing_factors   String[]         @default([])
+  strengths                  String[]         @default([])
+  improvement_areas          String[]         @default([])
+  created_at                 DateTime?        @default(now()) @db.Timestamptz(6)
+  user_assessments           user_assessments @relation(fields: [assessment_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  career_paths               career_paths     @relation(fields: [recommended_career_path_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([assessment_id], map: "idx_recommendations_assessment_id")
+  @@index([user_id], map: "idx_recommendations_user_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_assessments {
+  id                         String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                    String            @unique @db.Uuid
+  interest_coding            Int?
+  interest_math_stats        Int?
+  interest_design_creativity Int?
+  interest_data_analysis     Int?
+  interest_business_finance  Int?
+  programming_languages      String[]          @default([])
+  tools_frameworks           String[]          @default([])
+  has_project_experience     Boolean?          @default(false)
+  career_goal                String?
+  time_horizon               String?
+  created_at                 DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime?         @default(now()) @db.Timestamptz(6)
+  recommendations            recommendations[]
+
+  @@index([user_id], map: "idx_user_assessments_user_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model user_profiles {
+  id                       String    @id @db.Uuid
+  email                    String?   @unique
+  full_name                String?
+  education_level          String?
+  academic_stream          String?
+  weekly_time_availability Int?
+  created_at               DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([id], map: "idx_user_profiles_user_id")
+}
+
+// --- Elevora App Models ---
+
+enum Role {
+  STANDARD
+  ELITE
+}
+
+enum SessionStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum ChallengeStatus {
+  ATTEMPTED
+  COMPLETED
+}
+
+model User {
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  name                  String
+  avatarUrl             String?
+  password              String?
+  role                  Role                   @default(STANDARD)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  interviewSessions     InterviewSession[]
+  challengeProgresses   ChallengeProgress[]
+  learningPathProgresses LearningPathProgress[]
+  resumes               Resume[]
+}
+
+model InterviewSession {
+  id             String        @id @default(uuid())
+  user           User          @relation(fields: [userId], references: [id])
+  userId         String
+  domain         String
+  level          String
+  status         SessionStatus @default(IN_PROGRESS)
+  overallScore   Int?
+  feedbackJson   Json?
+  transcript     Json?
+  proctoringJson Json?
+  duration       Int           @default(30)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model ChallengeProgress {
+  id          String          @id @default(uuid())
+  user        User            @relation(fields: [userId], references: [id])
+  userId      String
+  challengeId String
+  status      ChallengeStatus @default(ATTEMPTED)
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([userId, challengeId])
+}
+
+model LearningPathProgress {
+  id          String    @id @default(uuid())
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String
+  taskId      String
+  isCompleted Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, taskId])
+}
+
+model Resume {
+  id         String   @id @default(uuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  fileUrl    String
+  parsedData Json?
+  isActive   Boolean  @default(false)
+  uploadedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model CatalogItem {
+  id        String         @id @default(uuid())
+  role      String
+  company   String
+  diff      String
+  sessions  Int            @default(0)
+  icon      String
+  color     String
+  category  String
+  videos    CatalogVideo[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model CatalogVideo {
+  id            String      @id @default(uuid())
+  title         String
+  videoUrl      String
+  duration      Int?
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  catalogItemId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model SupportTicket {
+  id        String   @id @default(uuid())
+  email     String
+  type      String
+  message   String
+  createdAt DateTime @default(now())
+}
