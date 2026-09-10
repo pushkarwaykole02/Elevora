@@ -16,6 +16,9 @@ import {
 
 const INTERVIEWER = "AI Interviewer";
 
+const formatTime = (s: number) =>
+  `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
 export default function InterviewActivePage() {
   return (
     <Suspense
@@ -42,8 +45,8 @@ function InterviewActiveContent() {
   const [level, setLevel] = useState("junior");
   const [resumeContext, setResumeContext] = useState(false);
   const [questions, setQuestions] = useState<InterviewQuestion[]>(defaultFresherQuestions);
-  const [transcriptLines, setTranscriptLines] = useState<Array<{ speaker: string; text: string }>>([
-    { speaker: INTERVIEWER, text: "Welcome. I'll be conducting your interview today. Let's begin." },
+  const [transcriptLines, setTranscriptLines] = useState<Array<{ speaker: string; text: string; timestamp: string }>>([
+    { speaker: INTERVIEWER, text: "Welcome. I'll be conducting your interview today. Let's begin.", timestamp: "00:00" },
   ]);
   const [isCodeChatOpen, setIsCodeChatOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -112,7 +115,9 @@ function InterviewActiveContent() {
     const video = videoRef.current;
     const stream = streamRef.current;
     if (video && stream) {
-      video.srcObject = stream;
+      if (video.srcObject !== stream) {
+        video.srcObject = stream;
+      }
       void video.play().catch(() => {});
     }
   }, [interviewStarted, mediaReady, streamRef, videoRef]);
@@ -224,8 +229,9 @@ function InterviewActiveContent() {
               {
                 speaker: INTERVIEWER,
                 text: `Welcome. I'll be conducting your ${data.domain} interview at ${difficultyLabel} level.${resumeNote} Let's begin.`,
+                timestamp: "00:00",
               },
-              { speaker: INTERVIEWER, text: allQuestions[0].text },
+              { speaker: INTERVIEWER, text: allQuestions[0].text, timestamp: "00:00" },
             ]);
           }
         })
@@ -305,18 +311,19 @@ function InterviewActiveContent() {
     setUserInput("");
     if (isListening) stopSpeechRecognition();
 
+    const nowTime = formatTime(elapsed);
     const nextQIdx = currentQ + 1;
 
     setTranscriptLines((prev) => [
       ...prev,
-      { speaker: "You", text: finalResponse },
+      { speaker: "You", text: finalResponse, timestamp: nowTime },
     ]);
 
     if (nextQIdx < questions.length) {
       setCurrentQ(nextQIdx);
       setTranscriptLines((prev) => [
         ...prev,
-        { speaker: INTERVIEWER, text: questions[nextQIdx].text },
+        { speaker: INTERVIEWER, text: questions[nextQIdx].text, timestamp: nowTime },
       ]);
     } else {
       setTranscriptLines((prev) => [
@@ -324,15 +331,13 @@ function InterviewActiveContent() {
         {
           speaker: INTERVIEWER,
           text: "Excellent! We have covered all the questions. Click 'End Session' to submit and view your AI debrief.",
+          timestamp: nowTime,
         },
       ]);
     }
 
     setIsCodeChatOpen(false);
   };
-
-  const formatTime = (s: number) =>
-    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
   const handleEnd = async () => {
     setIsEvaluating(true);
@@ -345,8 +350,12 @@ function InterviewActiveContent() {
       timestamp: v.timestamp,
     }));
 
+    const finalTimestamp = formatTime(elapsed);
+
     const payload = {
       transcript: transcriptLines,
+      durationSeconds: elapsed,
+      durationFormatted: finalTimestamp,
       proctoring: {
         violationCount,
         violations: proctoringSummary,
@@ -377,11 +386,13 @@ function InterviewActiveContent() {
 
   const handleSkipQuestion = () => {
     const nextQIdx = currentQ + 1;
+    const nowTime = formatTime(elapsed);
     if (nextQIdx < questions.length) {
       setCurrentQ(nextQIdx);
       setTranscriptLines((prev) => [
         ...prev,
-        { speaker: INTERVIEWER, text: questions[nextQIdx].text },
+        { speaker: "You", text: "[Question Skipped]", timestamp: nowTime },
+        { speaker: INTERVIEWER, text: questions[nextQIdx].text, timestamp: nowTime },
       ]);
     }
   };
@@ -551,9 +562,12 @@ function InterviewActiveContent() {
                   key={i}
                   className={`flex flex-col gap-1 ${line.speaker === "You" ? "items-end" : "items-start"}`}
                 >
-                  <span className="text-[10px] font-label text-[var(--color-on-surface-variant)]">
-                    {line.speaker}
-                  </span>
+                  <div className="flex items-center gap-1.5 text-[10px] font-label text-[var(--color-on-surface-variant)]">
+                    <span>{line.speaker}</span>
+                    {line.timestamp && (
+                      <span className="font-mono text-[9px] opacity-60">· {line.timestamp}</span>
+                    )}
+                  </div>
                   <div
                     className={`px-3 py-2 rounded-2xl text-sm max-w-[90%] leading-relaxed ${
                       line.speaker === "You"

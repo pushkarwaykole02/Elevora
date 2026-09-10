@@ -494,38 +494,51 @@ function truncate(text: string, max = 120): string {
   return text.length <= max ? text : `${text.slice(0, max).trim()}…`;
 }
 
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 /**
  * Builds questions specifically probing candidate resume entries:
  * - Focuses intensely on the Final Year Project, technologies, and individual contribution
- * - Probes internships, hands-on skills, and certifications
+ * - Probes internships, hands-on skills, and certifications with randomized selection
  */
 export function buildResumeQuestions(data?: ResumeExtractedData | null, targetCount = 2): InterviewQuestion[] {
   if (!data) return [];
 
   const questions: InterviewQuestion[] = [];
+  const projects = Array.isArray(data.projects) ? data.projects.filter((p) => p && p.trim()) : [];
+  const internships = Array.isArray(data.internships) ? data.internships.filter((i) => i && i.trim()) : [];
+  const skills = Array.isArray(data.skills) ? data.skills.filter((s) => s && s.trim()) : [];
+  const certs = Array.isArray(data.certifications) ? data.certifications.filter((c) => c && c.trim()) : [];
 
-  // 1. Final Year Project / Primary Project
-  if (data.projects?.length) {
-    const primaryProject = truncate(data.projects[0]);
+  // 1. Projects: Probe primary project + randomly selected secondary project
+  if (projects.length > 0) {
+    const primaryProject = truncate(projects[0]);
     questions.push({
       text: `Your resume highlights your project "${primaryProject}". Walk me through your specific individual contribution, the architecture you designed, and the biggest technical hurdle you had to solve.`,
       type: "verbal",
       source: "resume",
     });
 
-    if (data.projects.length > 1 && questions.length < targetCount) {
-      const secondProject = truncate(data.projects[1]);
+    if (projects.length > 1) {
+      const otherProject = truncate(shuffleArray(projects.slice(1))[0]);
       questions.push({
-        text: `Regarding your project "${secondProject}", what core technologies did you choose and why were they better suited than alternative options?`,
+        text: `Regarding your project "${otherProject}", what core technologies did you choose and why were they better suited than alternative options?`,
         type: "verbal",
         source: "resume",
       });
     }
   }
 
-  // 2. Internship experience
-  if (data.internships?.length && questions.length < targetCount) {
-    const internship = truncate(data.internships[0]);
+  // 2. Internship experience (randomized sample if multiple)
+  if (internships.length > 0) {
+    const internship = truncate(shuffleArray(internships)[0]);
     questions.push({
       text: `Tell me about your internship experience at ${internship}. What deliverables did you ship, and what industry best practices did you take away?`,
       type: "verbal",
@@ -533,31 +546,40 @@ export function buildResumeQuestions(data?: ResumeExtractedData | null, targetCo
     });
   }
 
-  // 3. Technical Skills Verification
-  if (data.skills?.length && questions.length < targetCount) {
-    const skillsList = data.skills.slice(0, 3).join(", ");
+  // 3. Technical Skills Verification (randomly sample 2-3 skills from the entire skills pool)
+  if (skills.length > 0) {
+    const sampledSkills = shuffleArray(skills)
+      .slice(0, Math.min(3, skills.length))
+      .join(", ");
     questions.push({
-      text: `Your resume lists proficiency in ${skillsList}. Pick one of these tools and explain an actual, hands-on problem you solved using it.`,
+      text: `Your resume lists proficiency in ${sampledSkills}. Pick one of these tools and explain an actual, hands-on problem you solved using it.`,
       type: "verbal",
       source: "resume",
     });
   }
 
   // 4. Certifications or coursework
-  if (data.certifications?.length && questions.length < targetCount) {
+  if (certs.length > 0) {
+    const cert = truncate(shuffleArray(certs)[0], 80);
     questions.push({
-      text: `You have completed certification or coursework in ${truncate(data.certifications[0], 80)}. How did that training translate into your practical projects?`,
+      text: `You have completed certification or coursework in ${cert}. How did that training translate into your practical projects?`,
       type: "verbal",
       source: "resume",
     });
   }
 
-  return questions.slice(0, targetCount);
+  // If more than targetCount, keep primary project first and shuffle the rest
+  if (questions.length <= targetCount) {
+    return questions;
+  }
+
+  const [first, ...rest] = questions;
+  return [first, ...shuffleArray(rest)].slice(0, targetCount);
 }
 
 /**
  * Combines core domain questions with mandatory resume questions,
- * guaranteeing EXACTLY questionLimit (5, 10, or 15) unique questions.
+ * guaranteeing EXACTLY questionLimit (5, 10, or 15) unique, randomized questions.
  */
 export function buildInterviewQuestions(
   role: string,
@@ -575,25 +597,41 @@ export function buildInterviewQuestions(
   let resumeQs: InterviewQuestion[] = [];
   if (resumeContextEnabled) {
     if (generatedResumeQuestions?.length) {
-      resumeQs = generatedResumeQuestions.slice(0, resumeTarget).map((q) => ({
-        ...q,
-        type: q.type ?? "verbal",
-        source: "resume" as const,
-      }));
+      // Shuffle generated resume questions so different sessions explore different aspects
+      resumeQs = shuffleArray(generatedResumeQuestions)
+        .slice(0, resumeTarget)
+        .map((q) => ({
+          ...q,
+          type: q.type ?? "verbal",
+          source: "resume" as const,
+        }));
     } else {
       resumeQs = buildResumeQuestions(resumeData, resumeTarget);
     }
   }
 
-  const coreList = getCoreQuestions(role, level).map((q) => ({
+  const rawCore = getCoreQuestions(role, level).map((q) => ({
     ...q,
     source: q.source ?? ("core" as const),
   }));
 
+  // Separate verbal concepts and coding challenges, then shuffle each pool to avoid repetitiveness
+  const verbalPool = shuffleArray(rawCore.filter((q) => q.type === "verbal"));
+  const codePool = shuffleArray(rawCore.filter((q) => q.type === "code"));
+
+  // Build a randomized, balanced core queue that alternates verbal & code challenges
+  const randomizedCore: InterviewQuestion[] = [];
+  let v = 0;
+  let c = 0;
+  while (v < verbalPool.length || c < codePool.length) {
+    if (v < verbalPool.length) randomizedCore.push(verbalPool[v++]);
+    if (c < codePool.length) randomizedCore.push(codePool[c++]);
+  }
+
   // Interleave resume questions into the interview flow naturally:
-  // Q1: Core icebreaker / opening
+  // Q1: Core opening question (randomized from role bank)
   // Q2: Resume question (e.g. final year project)
-  // Q3, Q4: Core technical questions
+  // Q3, Q4: Core technical / coding challenges (randomized from role bank)
   // Q5: Resume question (e.g. internship / skills)
   // Subsequent questions: Core + remaining resume
   const blended: InterviewQuestion[] = [];
@@ -611,8 +649,8 @@ export function buildInterviewQuestions(
   let resumeIdx = 0;
 
   // Slot 1: Core opening question
-  if (coreIdx < coreList.length) {
-    addUnique(coreList[coreIdx++]);
+  if (coreIdx < randomizedCore.length) {
+    addUnique(randomizedCore[coreIdx++]);
   }
 
   // Slot 2: Resume Question 1 (e.g. Final Year Project)
@@ -620,7 +658,7 @@ export function buildInterviewQuestions(
     addUnique(resumeQs[resumeIdx++]);
   }
 
-  // Next batch of core questions
+  // Next batch of core questions with periodic resume questions
   while (blended.length < safeLimit) {
     // Insert resume question periodically if available
     if (
@@ -631,8 +669,8 @@ export function buildInterviewQuestions(
       continue;
     }
 
-    if (coreIdx < coreList.length) {
-      addUnique(coreList[coreIdx++]);
+    if (coreIdx < randomizedCore.length) {
+      addUnique(randomizedCore[coreIdx++]);
     } else {
       break;
     }
@@ -643,10 +681,11 @@ export function buildInterviewQuestions(
     addUnique(resumeQs[resumeIdx++]);
   }
 
-  // Fill up from fallback pool if still under limit
+  // Fill up from shuffled fallback pool if still under limit
+  const shuffledFallbacks = shuffleArray(generalFallbackQuestions);
   let fallbackIdx = 0;
-  while (blended.length < safeLimit && fallbackIdx < generalFallbackQuestions.length) {
-    addUnique(generalFallbackQuestions[fallbackIdx++]);
+  while (blended.length < safeLimit && fallbackIdx < shuffledFallbacks.length) {
+    addUnique(shuffledFallbacks[fallbackIdx++]);
   }
 
   return blended.slice(0, safeLimit);

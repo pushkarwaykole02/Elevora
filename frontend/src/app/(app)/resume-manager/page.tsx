@@ -42,6 +42,7 @@ export default function ResumeManagerPage() {
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
 
   const isElite = (session?.user as any)?.role === "ELITE" || true; // Maintain default test capability
 
@@ -154,7 +155,35 @@ export default function ResumeManagerPage() {
     }
   };
 
+  const handleReanalyze = async (resumeId: string) => {
+    if (!userId || isReanalyzing) return;
+    setIsReanalyzing(true);
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+      const res = await fetch(`${backendUrl}/api/users/${userId}/resumes/${resumeId}/reanalyze`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("Re-analysis failed");
+      await fetchResumes();
+    } catch (err) {
+      console.error("Error re-analyzing resume:", err);
+      alert("Failed to re-analyze resume. Please try again.");
+    } finally {
+      setIsReanalyzing(false);
+    }
+  };
+
   const activeResume = resumes.find((r) => r.isActive);
+  const ext = activeResume?.parsedData?.extractedData;
+  const hasExtractedInfo = Boolean(
+    ext && (
+      (ext.name && ext.name !== "N/A") ||
+      (ext.email && ext.email !== "N/A") ||
+      (ext.phone && ext.phone !== "N/A") ||
+      (Array.isArray(ext.skills) && ext.skills.length > 0) ||
+      (Array.isArray(ext.projects) && ext.projects.length > 0)
+    )
+  );
 
   const insights = [
     {
@@ -414,105 +443,145 @@ export default function ResumeManagerPage() {
       )}
 
       {/* Extracted Resume Information */}
-      {activeResume && activeResume.parsedData.extractedData && (
-        <div className="mt-6 bg-[var(--color-surface-container-low)] ghost-border rounded-2xl p-6 animate-in fade-in duration-300">
-          <h2 className="font-headline font-bold text-lg mb-4 flex items-center gap-2">
-            <span className="material-symbols-outlined text-[var(--color-tertiary)]">contact_page</span>
-            Extracted Resume Information
-          </h2>
-          
-          {/* Summary Grid */}
-          <div className="grid md:grid-cols-3 gap-4 mb-6 border-b border-white/5 pb-6">
-            <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
-              <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Name</p>
-              <p className="font-headline font-bold text-sm text-white">{activeResume.parsedData.extractedData.name || "N/A"}</p>
+      {activeResume && (
+        !hasExtractedInfo ? (
+          <div className="mt-6 bg-[var(--color-surface-container-low)] ghost-border rounded-2xl p-6 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-headline font-bold text-lg flex items-center gap-2">
+                <span className="material-symbols-outlined text-[var(--color-tertiary)]">contact_page</span>
+                Extracted Resume Information
+              </h2>
+              <button
+                onClick={() => handleReanalyze(activeResume.id)}
+                disabled={isReanalyzing}
+                className="text-xs font-label text-[var(--color-primary)] hover:underline flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className={`material-symbols-outlined text-sm ${isReanalyzing ? 'animate-spin' : ''}`}>sync</span>
+                {isReanalyzing ? "Extracting..." : "Extract with AI"}
+              </button>
             </div>
-            <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
-              <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Email</p>
-              <p className="font-headline font-bold text-sm text-white">{activeResume.parsedData.extractedData.email || "N/A"}</p>
-            </div>
-            <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
-              <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Phone</p>
-              <p className="font-headline font-bold text-sm text-white">{activeResume.parsedData.extractedData.phone || "N/A"}</p>
+
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="w-10 h-10 rounded-full border-2 border-[var(--color-tertiary)] border-t-transparent animate-spin mb-3" />
+              <p className="font-headline font-bold text-sm text-[var(--color-on-surface)]">
+                {isReanalyzing ? "Extracting Resume Details with AI..." : "Parsing Resume Details..."}
+              </p>
+              <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 max-w-sm">
+                Identifying contact details, technical skills, projects, and credentials.
+              </p>
             </div>
           </div>
-
-          {/* Details */}
-          <div className="flex flex-col gap-5">
-            {/* Skills */}
-            {activeResume.parsedData.extractedData.skills && activeResume.parsedData.extractedData.skills.length > 0 && (
-              <div>
-                <h3 className="text-xs font-label text-[var(--color-on-surface-variant)] mb-2.5 uppercase tracking-wider">Identified Skills</h3>
-                <div className="flex flex-wrap gap-2">
-                  {activeResume.parsedData.extractedData.skills.map((skill, idx) => (
-                    <span key={idx} className="text-xs bg-white/5 border border-white/10 px-3.5 py-1.5 rounded-full text-white">
-                      {skill}
-                    </span>
-                  ))}
-                </div>
+        ) : (
+          <div className="mt-6 bg-[var(--color-surface-container-low)] ghost-border rounded-2xl p-6 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-headline font-bold text-lg flex items-center gap-2">
+                <span className="material-symbols-outlined text-[var(--color-tertiary)]">contact_page</span>
+                Extracted Resume Information
+              </h2>
+              <button
+                onClick={() => handleReanalyze(activeResume.id)}
+                disabled={isReanalyzing}
+                className="text-xs font-label text-[var(--color-on-surface-variant)] hover:text-[var(--color-primary)] flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                title="Re-run AI extraction"
+              >
+                <span className={`material-symbols-outlined text-sm ${isReanalyzing ? 'animate-spin text-[var(--color-primary)]' : ''}`}>sync</span>
+                <span>{isReanalyzing ? 'Re-analyzing...' : 'Re-analyze'}</span>
+              </button>
+            </div>
+            
+            {/* Summary Grid */}
+            <div className="grid md:grid-cols-3 gap-4 mb-6 border-b border-white/5 pb-6">
+              <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
+                <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Name</p>
+                <p className="font-headline font-bold text-sm text-white">{ext?.name || "N/A"}</p>
               </div>
-            )}
+              <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
+                <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Email</p>
+                <p className="font-headline font-bold text-sm text-white">{ext?.email || "N/A"}</p>
+              </div>
+              <div className="bg-[var(--color-surface-container)] rounded-xl p-4">
+                <p className="text-xs text-[var(--color-on-surface-variant)] mb-1">Phone</p>
+                <p className="font-headline font-bold text-sm text-white">{ext?.phone || "N/A"}</p>
+              </div>
+            </div>
 
-            {/* Grid for lists */}
-            <div className="grid md:grid-cols-2 gap-5 mt-2">
-              {/* Projects */}
-              {activeResume.parsedData.extractedData.projects && activeResume.parsedData.extractedData.projects.length > 0 && (
-                <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
-                  <h4 className="text-xs font-label text-[var(--color-primary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">code</span> Projects
-                  </h4>
-                  <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
-                    {activeResume.parsedData.extractedData.projects.map((p, idx) => (
-                      <li key={idx} className="leading-relaxed text-white">{p}</li>
+            {/* Details */}
+            <div className="flex flex-col gap-5">
+              {/* Skills */}
+              {ext?.skills && ext.skills.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-label text-[var(--color-on-surface-variant)] mb-2.5 uppercase tracking-wider">Identified Skills</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {ext.skills.map((skill, idx) => (
+                      <span key={idx} className="text-xs bg-white/5 border border-white/10 px-3.5 py-1.5 rounded-full text-white">
+                        {skill}
+                      </span>
                     ))}
-                  </ul>
+                  </div>
                 </div>
               )}
 
-              {/* Internships */}
-              {activeResume.parsedData.extractedData.internships && activeResume.parsedData.extractedData.internships.length > 0 && (
-                <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
-                  <h4 className="text-xs font-label text-[var(--color-secondary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">work</span> Internships / Experience
-                  </h4>
-                  <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
-                    {activeResume.parsedData.extractedData.internships.map((int, idx) => (
-                      <li key={idx} className="leading-relaxed text-white">{int}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {/* Grid for lists */}
+              <div className="grid md:grid-cols-2 gap-5 mt-2">
+                {/* Projects */}
+                {ext?.projects && ext.projects.length > 0 && (
+                  <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
+                    <h4 className="text-xs font-label text-[var(--color-primary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">code</span> Projects
+                    </h4>
+                    <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
+                      {ext.projects.map((p, idx) => (
+                        <li key={idx} className="leading-relaxed text-white">{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
-              {/* Education */}
-              {activeResume.parsedData.extractedData.education && activeResume.parsedData.extractedData.education.length > 0 && (
-                <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
-                  <h4 className="text-xs font-label text-[var(--color-tertiary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">school</span> Education
-                  </h4>
-                  <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
-                    {activeResume.parsedData.extractedData.education.map((edu, idx) => (
-                      <li key={idx} className="leading-relaxed text-white">{edu}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                {/* Internships */}
+                {ext?.internships && ext.internships.length > 0 && (
+                  <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
+                    <h4 className="text-xs font-label text-[var(--color-secondary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">work</span> Internships / Experience
+                    </h4>
+                    <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
+                      {ext.internships.map((int, idx) => (
+                        <li key={idx} className="leading-relaxed text-white">{int}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
-              {/* Certifications */}
-              {activeResume.parsedData.extractedData.certifications && activeResume.parsedData.extractedData.certifications.length > 0 && (
-                <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
-                  <h4 className="text-xs font-label text-[var(--color-primary-fixed)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">military_tech</span> Certifications
-                  </h4>
-                  <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
-                    {activeResume.parsedData.extractedData.certifications.map((c, idx) => (
-                      <li key={idx} className="leading-relaxed text-white">{c}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                {/* Education */}
+                {ext?.education && ext.education.length > 0 && (
+                  <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
+                    <h4 className="text-xs font-label text-[var(--color-tertiary)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">school</span> Education
+                    </h4>
+                    <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
+                      {ext.education.map((edu, idx) => (
+                        <li key={idx} className="leading-relaxed text-white">{edu}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Certifications */}
+                {ext?.certifications && ext.certifications.length > 0 && (
+                  <div className="bg-[var(--color-surface-container)] rounded-xl p-5">
+                    <h4 className="text-xs font-label text-[var(--color-primary-fixed)] mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">military_tech</span> Certifications
+                    </h4>
+                    <ul className="list-disc pl-4 text-xs text-[var(--color-on-surface-variant)] flex flex-col gap-2">
+                      {ext.certifications.map((c, idx) => (
+                        <li key={idx} className="leading-relaxed text-white">{c}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )
       )}
 
       <AtsBuilderSection isElite={isElite} />

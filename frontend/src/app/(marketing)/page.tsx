@@ -1,12 +1,17 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { auth } from "@/auth";
+import HomeCtaButton from "@/components/HomeCtaButton";
 
 export const metadata: Metadata = {
   title: "Elevora | AI Interview Mastery",
   description: "The world's first luminescent interview simulator. Elevate your professional presence with real-time biometric feedback and industry-specific AI interrogators.",
 };
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const session = await auth();
+  const initialHref = session?.user ? "/interview/setup" : "/sign-up";
+
   return (
     <main className="relative pt-24">
       {/* ── Hero Section ──────────────────────────────────────── */}
@@ -42,13 +47,13 @@ export default function LandingPage() {
 
           {/* CTA buttons */}
           <div className="flex flex-col md:flex-row gap-6 justify-center items-center mt-10 mb-5">
-            <Link
-              href="/sign-up"
+            <HomeCtaButton
               id="hero-cta-start"
+              initialHref={initialHref}
               className="px-8 py-4 bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-fixed)] text-[var(--color-on-primary)] font-bold rounded-xl text-lg hover:shadow-[0_0_30px_rgba(0,241,254,0.4)] transition-all duration-300 active:scale-95"
             >
               Start for Free
-            </Link>
+            </HomeCtaButton>
           </div>
         </div>
       </section>
@@ -158,13 +163,13 @@ export default function LandingPage() {
             <p className="text-[var(--color-on-surface-variant)] text-lg mb-10 max-w-xl mx-auto">
               Join executives and designers who use Elevora to refine their professional edge.
             </p>
-            <Link
-              href="/sign-up"
+            <HomeCtaButton
               id="cta-claim-session"
+              initialHref={initialHref}
               className="inline-block bg-[var(--color-primary)] text-[var(--color-on-primary)] font-black px-12 py-5 rounded-xl text-xl hover:shadow-[0_0_40px_rgba(153,247,255,0.4)] transition-all hover:scale-105 active:scale-95"
             >
               Claim Your Free Session
-            </Link>
+            </HomeCtaButton>
           </div>
         </div>
       </section>
