@@ -395,110 +395,103 @@ app.get('/api/users/:userId/dashboard', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/resumes
-app.get('/api/users/:userId/resumes', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const resumes = await prisma.resume.findMany({
-      where: { userId },
-      orderBy: { uploadedAt: 'desc' }
-    });
-    res.json(resumes);
-  } catch (error) {
-    console.error('Error fetching resumes:', error);
-    res.status(500).json({ error: 'Failed to fetch resumes' });
-  }
-});
+// Helper: Extract baseline resume info via regex and dictionary (instant & offline safe)
+function extractLocalResumeData(text: string) {
+  const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch ? emailMatch[0].trim() : "";
 
-// POST /api/users/:userId/resumes (upload resume)
-app.post('/api/users/:userId/resumes', async (req, res) => {
-  const { userId } = req.params;
-  const { name, dataUrl, size } = req.body;
+  const phoneMatch = text.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\+?\d{10,13}/);
+  const phone = phoneMatch ? phoneMatch[0].trim() : "";
 
-  if (!name || !dataUrl) {
-    return res.status(400).json({ error: 'Name and dataUrl are required' });
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  let name = "";
+  for (const line of lines.slice(0, 6)) {
+    const firstPart = line.split(/[|+—•\t\d]/)[0].trim();
+    const words = firstPart.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4 && !/resume|cv|curriculum|profile|summary|contact|engineer|developer|education|experience|skills/i.test(firstPart)) {
+      name = firstPart;
+      break;
+    }
   }
 
-  try {
-    const existingCount = await prisma.resume.count({ where: { userId } });
-    if (existingCount >= MAX_RESUMES_PER_USER) {
-      return res.status(400).json({
-        error: `Maximum of ${MAX_RESUMES_PER_USER} resumes allowed. Delete one to upload a new resume.`,
-      });
+  const knownSkills = [
+    'JavaScript', 'TypeScript', 'Python', 'Java', 'C++', 'C#', 'C', 'PHP',
+    'HTML', 'CSS', 'React', 'React.js', 'Next.js', 'Node.js', 'Express', 'Express.js',
+    'Tailwind CSS', 'Tailwind', 'Bootstrap', 'Vite', 'Redux', 'MongoDB',
+    'PostgreSQL', 'MySQL', 'SQL', 'SQLite', 'Redis', 'Firebase', 'Supabase',
+    'AWS', 'Azure', 'GCP', 'Docker', 'Kubernetes', 'Git', 'GitHub', 'REST APIs',
+    'GraphQL', 'Linux', 'Figma', 'Jest', 'Postman', 'XAMPP'
+  ];
+
+  const foundSkills = new Set<string>();
+  for (const skill of knownSkills) {
+    const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (regex.test(text)) {
+      foundSkills.add(skill);
     }
+  }
 
-    // 1. Create uploads directory if not exists
-    const uploadDir = path.join(__dirname, '..', 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
+  return {
+    name,
+    email,
+    phone,
+    skills: Array.from(foundSkills),
+    projects: [] as string[],
+    education: [] as string[],
+    internships: [] as string[],
+    certifications: [] as string[]
+  };
+}
 
-    // 2. Decode base64 and write file to disk
-    const uniqueName = `${Date.now()}_${name}`;
-    const filePath = path.join(uploadDir, uniqueName);
-    const base64Data = dataUrl.split(';base64,').pop();
-    
-    if (!base64Data) {
-      return res.status(400).json({ error: 'Invalid file data' });
-    }
-
-    const buffer = Buffer.from(base64Data, 'base64');
-    fs.writeFileSync(filePath, buffer);
-
-    // 3. Extract text from PDF if it is a PDF file
-    let extractedText = "";
-    if (name.toLowerCase().endsWith('.pdf')) {
-      try {
-        const pdfParse = require('pdf-parse');
-        const parser = new pdfParse.PDFParse({ data: buffer });
-        await parser.load();
+// Helper: Parse buffer (PDF) and enrich with Gemini AI + local regex fallback
+async function analyzeResumeBuffer(buffer: Buffer, filename: string, size?: string) {
+  let extractedText = "";
+  if (filename.toLowerCase().endsWith('.pdf')) {
+    try {
+      const pdfParseModule = require('pdf-parse');
+      if (pdfParseModule.PDFParse) {
+        const parser = new pdfParseModule.PDFParse({ data: buffer });
+        if (typeof parser.load === 'function') await parser.load();
         const textResult = await parser.getText({ parseHyperlinks: true });
-        extractedText = textResult.text || "";
-        parser.destroy();
-      } catch (pdfError) {
-        console.error('Error parsing PDF content:', pdfError);
-        extractedText = "";
+        extractedText = textResult?.text || "";
+        if (typeof parser.destroy === 'function') parser.destroy();
+      } else if (typeof pdfParseModule === 'function') {
+        const pdfData = await pdfParseModule(buffer);
+        extractedText = pdfData?.text || "";
       }
+    } catch (pdfError) {
+      console.error('Error parsing PDF content:', pdfError);
+      extractedText = "";
     }
+  }
 
-    // 4. Default insights (fallback)
-    let parsedData: any = {
-      atsScore: 70,
-      keywordDensity: "Good",
-      actionVerbs: 12,
-      strengths: [
-        "Clearly lists educational credentials.",
-        "Structured layout with distinguishable headings.",
-        "Contains relevant entry-level technical skills."
-      ],
-      missingSections: [
-        "GitHub Link",
-        "LinkedIn Link"
-      ],
-      suggestions: [
-        "Include more quantifiable achievements with metrics (e.g. % improvement).",
-        "List your technical skills clearly in a dedicated section.",
-        "Ensure your resume matches standard single-column ATS-friendly layouts."
-      ],
-      extractedData: {
-        name: "",
-        email: "",
-        phone: "",
-        skills: [],
-        projects: [],
-        education: [],
-        internships: [],
-        certifications: []
-      },
-      size: size || "100 KB"
-    };
+  const localExtracted = extractLocalResumeData(extractedText);
 
-    // 5. Call Gemini API if Key is present and we extracted text
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (geminiApiKey && extractedText.trim().length > 30) {
-      try {
-        console.log(`Calling Gemini API for resume analysis (${name})...`);
-        const prompt = `
+  let parsedData: any = {
+    atsScore: 75,
+    keywordDensity: "Good",
+    actionVerbs: 12,
+    strengths: [
+      "Clearly lists educational credentials.",
+      "Structured layout with distinguishable headings.",
+      "Contains relevant entry-level technical skills."
+    ],
+    missingSections: [
+      "GitHub Link",
+      "LinkedIn Link"
+    ],
+    suggestions: [
+      "Include more quantifiable achievements with metrics (e.g. % improvement).",
+      "List your technical skills clearly in a dedicated section.",
+      "Ensure your resume matches standard single-column ATS-friendly layouts."
+    ],
+    extractedData: localExtracted,
+    size: size || "100 KB"
+  };
+
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  if (geminiApiKey && extractedText.trim().length > 30) {
+    const prompt = `
 You are an expert Applicant Tracking System (ATS) resume scanner and career coach, specifically focused on evaluating college students and freshers.
 Analyze the following resume text and provide a rigorous, honest, yet constructive evaluation.
 
@@ -542,7 +535,11 @@ Resume text:
 ${extractedText.substring(0, 10000)}
 `;
 
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${geminiApiKey}`, {
+    const candidateModels = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.8-flash'];
+    for (const model of candidateModels) {
+      try {
+        console.log(`Calling Gemini (${model}) for resume analysis (${filename})...`);
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -561,6 +558,7 @@ ${extractedText.substring(0, 10000)}
               responseMimeType: 'application/json',
             },
           }),
+          signal: AbortSignal.timeout(12000),
         });
 
         if (response.ok) {
@@ -568,14 +566,13 @@ ${extractedText.substring(0, 10000)}
           const aiResponseText = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
           if (aiResponseText) {
             const aiData = JSON.parse(aiResponseText.trim());
-            
-            // Validate extractedData safely
             const rawExt = aiData.extractedData || {};
-            const extractedData = {
-              name: typeof rawExt.name === 'string' ? rawExt.name : "",
-              email: typeof rawExt.email === 'string' ? rawExt.email : "",
-              phone: typeof rawExt.phone === 'string' ? rawExt.phone : "",
-              skills: Array.isArray(rawExt.skills) ? rawExt.skills : [],
+
+            const mergedExtractedData = {
+              name: (typeof rawExt.name === 'string' && rawExt.name.trim()) ? rawExt.name.trim() : localExtracted.name,
+              email: (typeof rawExt.email === 'string' && rawExt.email.trim()) ? rawExt.email.trim() : localExtracted.email,
+              phone: (typeof rawExt.phone === 'string' && rawExt.phone.trim()) ? rawExt.phone.trim() : localExtracted.phone,
+              skills: Array.isArray(rawExt.skills) && rawExt.skills.length > 0 ? rawExt.skills : localExtracted.skills,
               projects: Array.isArray(rawExt.projects) ? rawExt.projects : [],
               education: Array.isArray(rawExt.education) ? rawExt.education : [],
               internships: Array.isArray(rawExt.internships) ? rawExt.internships : [],
@@ -586,30 +583,137 @@ ${extractedText.substring(0, 10000)}
               atsScore: typeof aiData.atsScore === 'number' ? aiData.atsScore : 75,
               keywordDensity: ['Fair', 'Good', 'Excellent'].includes(aiData.keywordDensity) ? aiData.keywordDensity : 'Good',
               actionVerbs: typeof aiData.actionVerbs === 'number' ? aiData.actionVerbs : 15,
-              strengths: Array.isArray(aiData.strengths) ? aiData.strengths.slice(0, 5) : [
-                "Clear education section",
-                "Includes core technical skills"
-              ],
-              missingSections: Array.isArray(aiData.missingSections) ? aiData.missingSections : [],
-              suggestions: Array.isArray(aiData.suggestions) ? aiData.suggestions.slice(0, 5) : [
-                "Quantify your accomplishments.",
-                "Use strong action verbs."
-              ],
-              extractedData,
+              strengths: Array.isArray(aiData.strengths) ? aiData.strengths.slice(0, 5) : parsedData.strengths,
+              missingSections: Array.isArray(aiData.missingSections) ? aiData.missingSections : parsedData.missingSections,
+              suggestions: Array.isArray(aiData.suggestions) ? aiData.suggestions.slice(0, 5) : parsedData.suggestions,
+              extractedData: mergedExtractedData,
               size: size || "100 KB"
             };
+            break;
           }
         } else {
-          console.error('Gemini API call failed with status:', response.status);
+          console.warn(`Gemini (${model}) failed with status ${response.status}`);
         }
-      } catch (geminiError) {
-        console.error('Error calling Gemini API:', geminiError);
+      } catch (geminiErr) {
+        console.warn(`Error or timeout with Gemini (${model}):`, geminiErr);
       }
-    } else {
-      console.warn("Skipping Gemini API call: API Key missing or insufficient resume text extracted.");
+    }
+  }
+
+  return parsedData;
+}
+
+// GET /api/users/:userId/resumes
+app.get('/api/users/:userId/resumes', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const resumes = await prisma.resume.findMany({
+      where: { userId },
+      orderBy: { uploadedAt: 'desc' }
+    });
+
+    // Auto-heal any resume whose extractedData is missing or empty
+    for (let i = 0; i < resumes.length; i++) {
+      const r = resumes[i];
+      const pd: any = r.parsedData || {};
+      const ext = pd.extractedData;
+      const needsHeal = !ext || (!ext.name && (!ext.skills || ext.skills.length === 0));
+      if (needsHeal && r.fileUrl) {
+        try {
+          const filePath = path.join(__dirname, '..', r.fileUrl);
+          if (fs.existsSync(filePath)) {
+            const buffer = fs.readFileSync(filePath);
+            const healedParsedData = await analyzeResumeBuffer(buffer, r.fileUrl, pd.size);
+            const updated = await prisma.resume.update({
+              where: { id: r.id },
+              data: { parsedData: healedParsedData as any }
+            });
+            resumes[i] = updated;
+          }
+        } catch (healErr) {
+          console.error(`Failed to auto-heal resume ${r.id}:`, healErr);
+        }
+      }
     }
 
-    // 6. Set other resumes of this user to inactive if this will be active
+    res.json(resumes);
+  } catch (error) {
+    console.error('Error fetching resumes:', error);
+    res.status(500).json({ error: 'Failed to fetch resumes' });
+  }
+});
+
+// POST /api/users/:userId/resumes/:resumeId/reanalyze (manually re-analyze a resume)
+app.post('/api/users/:userId/resumes/:resumeId/reanalyze', async (req, res) => {
+  const { userId, resumeId } = req.params;
+  try {
+    const resume = await prisma.resume.findFirst({
+      where: { id: resumeId, userId }
+    });
+    if (!resume) {
+      return res.status(404).json({ error: 'Resume not found' });
+    }
+
+    const filePath = path.join(__dirname, '..', resume.fileUrl);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Resume file not found on server' });
+    }
+
+    const buffer = fs.readFileSync(filePath);
+    const existingParsed: any = resume.parsedData || {};
+    const updatedParsedData = await analyzeResumeBuffer(buffer, resume.fileUrl, existingParsed.size);
+
+    const updatedResume = await prisma.resume.update({
+      where: { id: resumeId },
+      data: { parsedData: updatedParsedData as any }
+    });
+
+    res.json({ success: true, resume: updatedResume });
+  } catch (error) {
+    console.error('Error re-analyzing resume:', error);
+    res.status(500).json({ error: 'Failed to re-analyze resume' });
+  }
+});
+
+// POST /api/users/:userId/resumes (upload resume)
+app.post('/api/users/:userId/resumes', async (req, res) => {
+  const { userId } = req.params;
+  const { name, dataUrl, size } = req.body;
+
+  if (!name || !dataUrl) {
+    return res.status(400).json({ error: 'Name and dataUrl are required' });
+  }
+
+  try {
+    const existingCount = await prisma.resume.count({ where: { userId } });
+    if (existingCount >= MAX_RESUMES_PER_USER) {
+      return res.status(400).json({
+        error: `Maximum of ${MAX_RESUMES_PER_USER} resumes allowed. Delete one to upload a new resume.`,
+      });
+    }
+
+    // 1. Create uploads directory if not exists
+    const uploadDir = path.join(__dirname, '..', 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    // 2. Decode base64 and write file to disk
+    const uniqueName = `${Date.now()}_${name}`;
+    const filePath = path.join(uploadDir, uniqueName);
+    const base64Data = dataUrl.split(';base64,').pop();
+    
+    if (!base64Data) {
+      return res.status(400).json({ error: 'Invalid file data' });
+    }
+
+    const buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(filePath, buffer);
+
+    // 3. Analyze resume with robust extractor & AI
+    const parsedData = await analyzeResumeBuffer(buffer, name, size);
+
+    // 4. Set other resumes of this user to inactive if this will be active
     const resumeCount = await prisma.resume.count({ where: { userId } });
     const isActive = resumeCount === 0; // First resume uploaded is active by default
 
@@ -620,7 +724,7 @@ ${extractedText.substring(0, 10000)}
       });
     }
 
-    // 7. Create database record
+    // 5. Create database record
     const resume = await prisma.resume.create({
       data: {
         userId,
@@ -742,12 +846,15 @@ async function generateResumeInterviewQuestions(
   const prompt = `
 You are an expert technical interviewer preparing personalized questions for a candidate interviewing for "${domain}" at "${level}" difficulty.
 
-Generate exactly ${targetCount} unique verbal interview questions based ONLY on the candidate's resume data below. Questions must:
-1. Reference specific items from their resume (especially their Final Year Project, project names, tools, skills, or internships).
-2. For projects: Probe their individual contribution, architectural decisions, and why they chose their tech stack.
-3. Match ${level} difficulty: ${difficultyGuide}.
-4. Be answerable verbally in 2–3 minutes each.
-5. NOT ask them to write code (type must always be "verbal").
+Generate exactly ${targetCount} unique verbal interview questions based ONLY on the candidate's resume data below.
+ANTI-REPETITION & DIVERSITY GUIDELINES:
+1. Ensure questions are fresh, non-repetitive, and varied.
+2. If multiple projects are listed, probe different projects (e.g. project #2 or #3, not always project #1).
+3. If multiple skills or technologies are listed, ask about different specific tools, databases, or frameworks.
+4. Explore distinct technical angles: architectural design choices, challenging bugs, security considerations, and production deployment trade-offs.
+5. Match ${level} difficulty: ${difficultyGuide}.
+6. Be answerable verbally in 2–3 minutes each.
+7. NOT ask them to write code (type must always be "verbal").
 
 Resume data:
 - Name: ${extractedData.name || 'Not provided'}
@@ -774,7 +881,10 @@ Respond with ONLY raw JSON (no markdown):
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json' },
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.85,
+            },
           }),
           signal: AbortSignal.timeout(12000),
         }
@@ -816,58 +926,76 @@ function truncateResumeText(text: string, max = 120): string {
   return text.length <= max ? text : `${text.slice(0, max).trim()}…`;
 }
 
-/** Template fallback when Gemini is unavailable or returns nothing */
+/** Template fallback when Gemini is unavailable or returns nothing (randomized) */
 function buildTemplateResumeQuestions(
   extractedData: Record<string, unknown> | null,
   maxCount = 2
 ): Array<{ text: string; type: string; source: string }> {
   if (!extractedData) return [];
 
-  const projects = Array.isArray(extractedData.projects) ? extractedData.projects as string[] : [];
-  const internships = Array.isArray(extractedData.internships) ? extractedData.internships as string[] : [];
-  const skills = Array.isArray(extractedData.skills) ? extractedData.skills as string[] : [];
-  const certifications = Array.isArray(extractedData.certifications) ? extractedData.certifications as string[] : [];
+  const rawProjects = Array.isArray(extractedData.projects) ? (extractedData.projects as string[]) : [];
+  const rawInternships = Array.isArray(extractedData.internships) ? (extractedData.internships as string[]) : [];
+  const rawSkills = Array.isArray(extractedData.skills) ? (extractedData.skills as string[]) : [];
+  const rawCerts = Array.isArray(extractedData.certifications) ? (extractedData.certifications as string[]) : [];
 
+  const shuffle = <T>(arr: T[]): T[] => {
+    const c = [...arr];
+    for (let i = c.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [c[i], c[j]] = [c[j], c[i]];
+    }
+    return c;
+  };
+
+  const projects = rawProjects.filter((p) => p && p.trim());
   const questions: Array<{ text: string; type: string; source: string }> = [];
 
   if (projects.length > 0) {
     questions.push({
-      text: `I see on your resume you worked on "${truncateResumeText(projects[0])}". Walk me through your specific contribution and the technical challenges you solved.`,
+      text: `I see on your resume you worked on "${truncateResumeText(projects[0])}". Walk me through your specific contribution, system architecture, and the biggest technical challenge you solved.`,
       type: 'verbal',
       source: 'resume',
     });
-    if (projects.length > 1 && questions.length < maxCount) {
+    if (projects.length > 1) {
+      const otherProject = shuffle(projects.slice(1))[0];
       questions.push({
-        text: `Tell me about your project "${truncateResumeText(projects[1])}". What technologies did you use and what was your individual role?`,
+        text: `Tell me about your project "${truncateResumeText(otherProject)}". What technologies did you choose and why were they better suited than alternatives?`,
         type: 'verbal',
         source: 'resume',
       });
     }
   }
 
-  if (internships.length > 0 && questions.length < maxCount) {
+  if (rawInternships.length > 0) {
+    const internship = shuffle(rawInternships)[0];
     questions.push({
-      text: `Tell me about your experience at ${truncateResumeText(internships[0])}. What core skills did you apply?`,
-      type: 'verbal',
-      source: 'resume',
-    });
-  } else if (skills.length > 0 && questions.length < maxCount) {
-    questions.push({
-      text: `Your resume highlights proficiency in ${skills.slice(0, 3).join(', ')}. Pick one and explain how you used it in a real project.`,
+      text: `Tell me about your experience at ${truncateResumeText(internship)}. What deliverables did you ship, and what industry best practices did you take away?`,
       type: 'verbal',
       source: 'resume',
     });
   }
 
-  if (certifications.length > 0 && questions.length < maxCount) {
+  if (rawSkills.length > 0) {
+    const sampledSkills = shuffle(rawSkills).slice(0, Math.min(3, rawSkills.length)).join(', ');
     questions.push({
-      text: `You hold a certification in ${truncateResumeText(certifications[0], 80)}. How has this knowledge helped you in practical projects?`,
+      text: `Your resume highlights proficiency in ${sampledSkills}. Pick one and explain how you used it in a real project.`,
       type: 'verbal',
       source: 'resume',
     });
   }
 
-  return questions.slice(0, maxCount);
+  if (rawCerts.length > 0) {
+    const cert = shuffle(rawCerts)[0];
+    questions.push({
+      text: `You hold a certification in ${truncateResumeText(cert, 80)}. How has this knowledge helped you in practical projects?`,
+      type: 'verbal',
+      source: 'resume',
+    });
+  }
+
+  if (questions.length <= maxCount) return questions;
+  const [first, ...rest] = questions;
+  return [first, ...shuffle(rest)].slice(0, maxCount);
 }
 
 // POST /api/sessions (start session - resume is mandatory)
@@ -1021,8 +1149,9 @@ const generateFeedback = (
   role: string,
   difficulty: string,
   persona: string,
-  transcript?: Array<{ speaker: string; text: string }> | null,
-  proctoring?: { violationCount?: number; violations?: Array<{ message: string }>; facePresent?: boolean } | null
+  transcript?: Array<{ speaker: string; text: string; timestamp?: string }> | null,
+  proctoring?: { violationCount?: number; violations?: Array<{ message: string }>; facePresent?: boolean } | null,
+  durationSeconds?: number
 ) => {
   const isFresher = ['junior', 'intern', 'associate'].includes(difficulty.toLowerCase());
   const techCategoryName = isFresher ? "Technical Fundamentals" : "Technical Depth";
@@ -1060,6 +1189,69 @@ const generateFeedback = (
 
   const isLowQuality = userLines.length === 0 || (nonAnswersCount / Math.max(1, userLines.length)) >= 0.5;
 
+  const qLines = Array.isArray(transcript)
+    ? transcript.filter(l => l.speaker === 'AI Interviewer' || l.speaker === 'interviewer')
+    : [];
+
+  const totalSec = typeof durationSeconds === 'number' && durationSeconds > 0 ? durationSeconds : 180;
+  const formatSec = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  const getEventTime = (transcriptIdx: number, defaultFraction: number) => {
+    if (Array.isArray(transcript) && transcript[transcriptIdx]?.timestamp) {
+      return transcript[transcriptIdx].timestamp!;
+    }
+    return formatSec(Math.round(totalSec * defaultFraction));
+  };
+
+  // Case 1: ZERO responses submitted by candidate
+  if (userLines.length === 0) {
+    const categories = [
+      {
+        name: "Communication",
+        score: 0,
+        color: "var(--color-primary)",
+        notes: "No candidate verbal or written responses were provided during the interview session (0 answers submitted)."
+      },
+      {
+        name: techCategoryName,
+        score: 0,
+        color: "var(--color-secondary)",
+        notes: `Candidate did not attempt or answer any ${isFresher ? 'technical fundamentals' : 'technical depth'} questions for the ${role} role.`
+      },
+      {
+        name: leadCategoryName,
+        score: 0,
+        color: "var(--color-tertiary)",
+        notes: "Unable to assess structured problem solving or coding ability because no candidate responses were provided."
+      },
+      {
+        name: "Clarity Under Pressure",
+        score: 0,
+        color: "var(--color-error)",
+        notes: violationsCount > 0
+          ? `Session concluded with 0 answers submitted and ${violationsCount} proctoring violation(s) recorded.`
+          : "Interview session ended with zero candidate answers submitted."
+      }
+    ];
+
+    const highlights = [
+      { time: "00:00", label: "Interview session initiated" },
+      { time: getEventTime(0, 0.10), label: qLines[0] ? `Opening question presented to candidate` : "Interview question presented" },
+      { time: formatSec(Math.min(totalSec, 30)), label: "No response received from candidate" },
+      { time: formatSec(totalSec), label: `Session concluded (${formatSec(totalSec)}) with 0 responses submitted` }
+    ];
+
+    return {
+      overallScore: 0,
+      feedbackJson: {
+        persona,
+        categories,
+        highlights
+      }
+    };
+  }
+
   let commScore: number;
   let techScore: number;
   let probScore: number;
@@ -1070,30 +1262,32 @@ const generateFeedback = (
   let notesClarity: string;
   let highlights: Array<{ time: string; label: string }> = [];
 
-  const qLines = Array.isArray(transcript)
-    ? transcript.filter(l => l.speaker === 'AI Interviewer' || l.speaker === 'interviewer')
-    : [];
-
   if (isLowQuality) {
-    commScore = Math.max(5, Math.min(25, Math.round(10 + substantiveAnswersCount * 4)));
-    techScore = Math.max(0, Math.min(20, Math.round(5 + substantiveAnswersCount * 5)));
-    probScore = Math.max(0, Math.min(20, Math.round(5 + substantiveAnswersCount * 5)));
-    clarityScore = Math.max(5, Math.min(25, 20 - Math.min(15, violationsCount * 2)));
+    commScore = substantiveAnswersCount === 0
+      ? Math.max(0, Math.min(10, userLines.length * 2))
+      : Math.max(5, Math.min(25, Math.round(5 + substantiveAnswersCount * 4)));
+    techScore = substantiveAnswersCount === 0
+      ? 0
+      : Math.max(0, Math.min(20, Math.round(substantiveAnswersCount * 5)));
+    probScore = substantiveAnswersCount === 0
+      ? 0
+      : Math.max(0, Math.min(20, Math.round(substantiveAnswersCount * 5)));
+    clarityScore = Math.max(0, Math.min(25, 15 - Math.min(15, violationsCount * 3)));
 
-    notesComm = userLines.length === 0
-      ? "No candidate verbal or written responses were provided during the interview session."
-      : "The candidate answered primarily with 'don't know', very brief phrases, or unrelated text. Articulation and engagement need significant improvement.";
-    notesTech = `The candidate was unable to answer core ${isFresher ? 'technical fundamentals' : 'technical depth'} questions for the ${role} role, responding with 'don't know' to key concepts.`;
+    notesComm = "The candidate answered primarily with 'don't know', very brief phrases, or unrelated text. Articulation and engagement need significant improvement.";
+    notesTech = substantiveAnswersCount === 0
+      ? `The candidate was unable to answer core ${isFresher ? 'technical fundamentals' : 'technical depth'} questions for the ${role} role, responding with 'don't know' or skipping technical concepts.`
+      : `The candidate struggled with core ${isFresher ? 'technical fundamentals' : 'technical depth'} questions for the ${role} role.`;
     notesLead = "Unable to assess structured problem solving or coding ability due to absent or incomplete answers.";
     notesClarity = violationsCount > 0
       ? `Struggled under interview pressure with ${violationsCount} proctoring violations recorded (e.g. face not visible on camera).`
       : "Showed hesitation and gave up on technical prompts rather than working through possible solutions.";
 
     highlights = [
-      { time: "01:00", label: qLines[0] ? `Opening question: candidate provided brief/unrelated response` : "Interview session initiated" },
-      { time: "03:30", label: qLines[1] ? `Candidate stated 'don't know' on technical probe` : "Candidate struggled with core concepts" },
-      { time: "06:15", label: qLines[2] ? `Coding challenge left incomplete or skipped` : "Problem solving probe unresolved" },
-      { time: "09:00", label: `Session completed with ${violationsCount} proctoring flag(s)` },
+      { time: getEventTime(0, 0.05), label: qLines[0] ? `Opening question: candidate provided brief/unrelated response` : "Interview session initiated" },
+      { time: getEventTime(1, 0.35), label: qLines[1] ? `Candidate stated 'don't know' on technical probe` : "Candidate struggled with core concepts" },
+      { time: getEventTime(2, 0.70), label: qLines[2] ? `Coding/technical challenge left incomplete or skipped` : "Problem solving probe unresolved" },
+      { time: formatSec(totalSec), label: `Session completed (${formatSec(totalSec)}) with ${violationsCount} proctoring flag(s)` },
     ];
   } else {
     commScore = Math.min(88, Math.max(55, Math.round(50 + (totalLength / userLines.length) * 0.25)));
@@ -1109,10 +1303,10 @@ const generateFeedback = (
       : "Maintained steady pace across interview questions.";
 
     highlights = [
-      { time: "01:15", label: `Initial introduction and role overview for ${role}` },
-      { time: "04:30", label: `Technical reasoning on primary domain question` },
-      { time: "08:10", label: `Approach to coding and system design scenario` },
-      { time: "12:00", label: `Session conclusion and final responses` },
+      { time: getEventTime(0, 0.05), label: `Initial introduction and role overview for ${role}` },
+      { time: getEventTime(1, 0.35), label: `Technical reasoning on primary domain question` },
+      { time: getEventTime(2, 0.70), label: `Approach to coding and system design scenario` },
+      { time: formatSec(totalSec), label: `Session conclusion and final responses (${formatSec(totalSec)})` },
     ];
   }
 
@@ -1138,7 +1332,7 @@ const generateFeedback = (
 // POST /api/sessions/:sessionId/complete
 app.post('/api/sessions/:sessionId/complete', async (req, res) => {
   const { sessionId } = req.params;
-  const { transcript, proctoring } = req.body || {};
+  const { transcript, proctoring, durationSeconds, durationFormatted } = req.body || {};
   const force = req.query.force === 'true';
 
   try {
@@ -1168,10 +1362,23 @@ app.post('/api/sessions/:sessionId/complete', async (req, res) => {
     const geminiApiKey = process.env.GEMINI_API_KEY;
     let feedback = null;
 
-    if (geminiApiKey && transcript && Array.isArray(transcript) && transcript.length > 0) {
+    const userLines = Array.isArray(transcript)
+      ? transcript.filter((l: any) => l.speaker === 'user' || l.speaker === 'candidate' || l.speaker === 'You')
+      : [];
+
+    // If candidate submitted ZERO responses, award an unequivocal 0 score without hallucinated AI points
+    if (userLines.length === 0) {
+      console.log(`Candidate provided 0 responses for session ${sessionId}. Generating strict zero-score debrief.`);
+      feedback = generateFeedback(session.domain, session.level, persona, transcript, proctoring, durationSeconds);
+    } else if (geminiApiKey && transcript && Array.isArray(transcript) && transcript.length > 0) {
       try {
         console.log(`Running truthful interview evaluation for session ${sessionId}...`);
-        const transcriptText = transcript.map(line => `${line.speaker}: ${line.text}`).join('\n');
+        const transcriptText = transcript
+          .map((line: any) => {
+            const timeTag = line.timestamp ? `[${line.timestamp}] ` : '';
+            return `${timeTag}${line.speaker}: ${line.text}`;
+          })
+          .join('\n');
         
         const isFresher = ['junior', 'intern', 'associate'].includes(session.level.toLowerCase());
         const techCategoryName = isFresher ? "Technical Fundamentals" : "Technical Depth";
@@ -1192,11 +1399,17 @@ Resume Context (enabled — check if answers align with claimed experience):
 `
           : '';
 
+        const actualDurationStr = durationFormatted || (typeof durationSeconds === 'number' && durationSeconds > 0
+          ? `${String(Math.floor(durationSeconds / 60)).padStart(2, '0')}:${String(durationSeconds % 60).padStart(2, '0')}`
+          : 'Unknown');
+
         const prompt = `
 You are a rigorous, truthful technical interview evaluation engine.
 Assess the candidate for the role "${session.domain}" (difficulty level: "${session.level}").
 
-Full Interview Transcript:
+Total Recorded Interview Duration: ${actualDurationStr}
+
+Full Interview Transcript (with recorded timestamps):
 ${transcriptText}
 
 Proctoring integrity data:
@@ -1205,21 +1418,25 @@ Proctoring integrity data:
 - Face visible: ${proctoring?.facePresent !== false ? 'Yes' : 'No'}
 ${resumeSection}
 STRICT & TRUTHFUL EVALUATION RULES:
-1. STRICT TRUTHFUL SCORING:
+1. STRICT TRUTHFUL SCORING & ZERO-TOLERANCE RULES:
    - Evaluate the candidate's ACTUAL answers strictly based on correctness, technical substance, and relevance.
    - RESUME & FINAL YEAR PROJECT GROUND-TRUTH VERIFICATION: Compare candidate responses directly against their resume data. Specifically evaluate their Final Year Project explanation: did the candidate demonstrate authentic personal contribution, architectural understanding, and clarity about their project stack, or was their answer vague, evasive, or inconsistent? Reflect this directly in ${techCategoryName} and ${leadCategoryName} feedback and score.
-   - If the candidate says "don't know", "idk", gives gibberish (e.g. "aqwr", "hello hi bye"), or skips questions, award a FAILING score (0-25) for those categories.
-   - NEVER fabricate answers or praise skills the candidate did not demonstrate! Under NO circumstances praise "good grasp of OOP" if the candidate answered "don't know"!
-   - Communication: Rate actual verbal expression and responsiveness. Non-answers or irrelevant phrases must receive low scores (5-25).
-   - ${techCategoryName}: Rate technical accuracy of answers given and depth of final year project / domain knowledge. If foundational questions were unanswered or wrong, score 0-20.
-   - ${leadCategoryName}: Rate problem-solving and algorithmic capability. If code/analytical questions were unanswered or gibberish, score 0-20.
-   - Clarity Under Pressure: Penalize heavily for proctoring violations (${violationsCount} violations) and inability to answer under pressure (score 5-25).
-   - Overall Score: The realistic weighted average of the four categories.
+   - ZERO & NON-ANSWER PENALTY: For ANY category where the candidate did not answer, said "don't know", "idk", gave gibberish (e.g. "aqwr", "hello hi bye"), or skipped questions, award a score of EXACTLY 0 for that category!
+   - Under NO circumstances award sympathy or pity points (e.g. 5, 8, 10, or 12) for unanswered questions or "don't know"!
+   - NEVER fabricate answers or praise skills the candidate did not demonstrate! Under NO circumstances praise "good grasp of OOP" if the candidate answered "don't know" or gave no answer!
+   - Communication: Rate actual verbal expression and responsiveness. Non-answers, silence, or irrelevant phrases must receive 0 (or 1-10 max if partially coherent).
+   - ${techCategoryName}: Rate technical accuracy of answers given. If foundational questions were unanswered, wrong, or skipped, score 0.
+   - ${leadCategoryName}: Rate problem-solving and algorithmic capability. If code/analytical questions were unanswered, wrong, or skipped, score 0.
+   - Clarity Under Pressure: Penalize heavily for proctoring violations (${violationsCount} violations) and inability to answer under pressure (score 0-15).
+   - Overall Score: The realistic weighted average of the four categories (0 if no valid answers were provided).
 2. CONSTRUCTIVE & ACCURATE NOTES:
    - Honestly detail what questions the candidate failed to answer and specific topics they need to study.
 3. SESSION HIGHLIGHTS:
-   - Exactly 4 highlights representing what ACTUALLY occurred in the transcript with realistic timestamps (mm:ss).
-   - Highlights MUST reflect true events (e.g. candidate could not answer question X, candidate entered incomplete input, etc.). NEVER invent imaginary topics!
+   - Exactly 4 chronological milestones representing key moments that ACTUALLY occurred in the transcript.
+   - REAL TIMESTAMPS: You MUST use the REAL [mm:ss] timestamps directly from the transcript lines above (when each question was asked or answered). Do NOT invent arbitrary or guessed timestamps (such as 00:15, 00:30, 00:45) when real timestamps are recorded in the transcript.
+   - Timestamps MUST be in chronologically ascending order and must NEVER exceed the total recorded session duration (${actualDurationStr}).
+   - The final highlight must represent the conclusion of the session at or near the final elapsed timestamp.
+   - Highlights MUST reflect true events (e.g. candidate gave strong answer to question X, candidate skipped question Y, candidate hesitated/silent, etc.). NEVER invent imaginary topics!
 
 Return ONLY a raw JSON object (no markdown, no backticks):
 {
@@ -1271,7 +1488,7 @@ Return ONLY a raw JSON object (no markdown, no backticks):
     // Fallback to truthful transcript-aware analysis if Gemini was unavailable
     if (!feedback) {
       console.log(`Using transcript-aware local analyzer for session ${sessionId}...`);
-      feedback = generateFeedback(session.domain, session.level, persona, transcript, proctoring);
+      feedback = generateFeedback(session.domain, session.level, persona, transcript, proctoring, durationSeconds);
     }
 
     const mergedFeedbackJson = normalizeFeedbackCategories({
@@ -1294,6 +1511,10 @@ Return ONLY a raw JSON object (no markdown, no backticks):
     const storedProctoring =
       proctoring && typeof proctoring === 'object' ? proctoring : null;
 
+    const actualMinutes = typeof durationSeconds === 'number' && durationSeconds > 0
+      ? Math.max(1, Math.round(durationSeconds / 60))
+      : undefined;
+
     const updatedSession = await prisma.interviewSession.update({
       where: { id: sessionId },
       data: {
@@ -1302,6 +1523,7 @@ Return ONLY a raw JSON object (no markdown, no backticks):
         feedbackJson: mergedFeedbackJson as Prisma.InputJsonValue,
         transcript: storedTranscript as Prisma.InputJsonValue,
         proctoringJson: storedProctoring as Prisma.InputJsonValue,
+        ...(actualMinutes ? { duration: actualMinutes } : {}),
       },
     });
 

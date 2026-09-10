@@ -147,9 +147,6 @@ export default function ProfilePage() {
             </div>
             <h2 className="font-headline font-bold text-lg text-white">{name || "Your Name"}</h2>
             <p className="text-xs text-[var(--color-on-surface-variant)] mt-1 break-all">{email || "your-email@example.com"}</p>
-            <div className="mt-4 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[var(--color-primary-container)] text-[var(--color-on-primary-container)] border border-[var(--color-primary)]/20">
-              Level 4 Analyst
-            </div>
           </div>
         </div>
 

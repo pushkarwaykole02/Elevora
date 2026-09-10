@@ -83,6 +83,16 @@ export function useMediaDevices({
       return null;
     }
 
+    if (streamRef.current && streamRef.current.active) {
+      const stream = streamRef.current;
+      if (videoRef.current && video && videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+        void videoRef.current.play().catch(() => {});
+      }
+      setStatus("granted");
+      return stream;
+    }
+
     setStatus("requesting");
     setError(null);
 
@@ -95,8 +105,20 @@ export function useMediaDevices({
       streamRef.current = stream;
 
       if (videoRef.current && video) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        if (videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream;
+        }
+        try {
+          await videoRef.current.play();
+        } catch (playErr: unknown) {
+          // An AbortError occurs when play() is interrupted by a fast re-render or new load.
+          // This is non-fatal because the stream is already active and attached.
+          if (playErr instanceof DOMException && playErr.name === "AbortError") {
+            // Silently ignore
+          } else {
+            console.warn("Video play error:", playErr);
+          }
+        }
       }
 
       if (audio) {
@@ -108,13 +130,20 @@ export function useMediaDevices({
       setStatus("granted");
       return stream;
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError" && streamRef.current?.active) {
+        setStatus("granted");
+        return streamRef.current;
+      }
+
       const message =
         err instanceof DOMException
           ? err.name === "NotAllowedError"
             ? "Camera and microphone access was denied. Both are required for the interview."
             : err.name === "NotFoundError"
               ? "No camera or microphone found. Please connect both devices."
-              : err.message
+              : err.name === "AbortError"
+                ? "Camera stream load was interrupted. Please retry."
+                : err.message
           : "Failed to access camera or microphone.";
       setStatus(err instanceof DOMException && err.name === "NotAllowedError" ? "denied" : "error");
       setError(message);

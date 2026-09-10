@@ -145,7 +145,9 @@ export default async function InterviewFeedbackPage({ searchParams }: PageProps)
               ? "Excellent session. You showed strong mastery of key communication, technical structure, and alignment principles. Review minor highlights to push for perfection."
               : overallScore >= 70
                 ? "Solid attempt. Good foundational skills, but technical depth and pressure management have room for growth. Practice with different personas to build confidence."
-                : "A challenging session. Structure your responses using the STAR method and focus on core technical scenarios to improve clarity and reduce hesitation."}
+                : overallScore > 0
+                  ? "A challenging session. Structure your responses using the STAR method and focus on core technical scenarios to improve clarity and reduce hesitation."
+                  : "No answers were submitted during this interview session. The session concluded with zero candidate responses recorded to evaluate."}
           </p>
         </div>
       </div>
@@ -220,9 +222,9 @@ export default async function InterviewFeedbackPage({ searchParams }: PageProps)
       <div className="bg-[var(--color-surface-container-low)] ghost-border rounded-2xl p-6 mb-8">
         <h2 className="font-headline font-bold text-lg mb-5">Session Highlights</h2>
         <div className="flex flex-col gap-3">
-          {highlights.map((h) => (
+          {highlights.map((h, i) => (
             <div
-              key={h.time}
+              key={`${h.time}-${i}`}
               className="flex items-center gap-4 py-3 px-4 rounded-xl bg-[var(--color-surface-container)]"
             >
               <span className="font-headline font-bold text-[var(--color-primary)] w-12">{h.time}</span>

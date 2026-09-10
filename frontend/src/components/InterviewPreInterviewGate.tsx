@@ -95,7 +95,8 @@ export default function InterviewPreInterviewGate({
               <p className="font-headline font-bold text-[var(--color-on-surface)] text-sm">Proctoring rules</p>
               <ul className="text-xs space-y-1 list-disc list-inside">
                 <li>Stay on this tab — switches are logged</li>
-                <li>Keep your face visible at all times</li>
+                <li>Keep your face visible and centered at all times</li>
+                <li>Avoid excessive movement or turning away</li>
                 <li>Copy/paste is disabled during the session</li>
                 <li>Code questions open a syntax chat panel</li>
               </ul>

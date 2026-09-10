@@ -25,9 +25,6 @@ export default function SideNav() {
           <span className="text-xl font-bold text-[var(--color-primary)] font-headline tracking-tight">
             Elevora
           </span>
-          <p className="text-[10px] text-[var(--color-on-surface-variant)] uppercase tracking-widest mt-1">
-            Level 4 Analyst
-          </p>
         </Link>
       </div>
 
