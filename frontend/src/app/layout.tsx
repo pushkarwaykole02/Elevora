@@ -42,6 +42,7 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${spaceGrotesk.variable} ${inter.variable} dark`}
+      suppressHydrationWarning
     >
       <head>
         {/* Material Symbols for icons */}
@@ -50,7 +51,10 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
         />
       </head>
-      <body className="min-h-screen bg-[var(--color-background)] text-[var(--color-on-surface)] antialiased">
+      <body
+        className="min-h-screen bg-[var(--color-background)] text-[var(--color-on-surface)] antialiased"
+        suppressHydrationWarning
+      >
         <SessionProvider>
           {children}
         </SessionProvider>

@@ -1558,6 +1558,7 @@ app.get('/api/sessions/:sessionId', async (req, res) => {
       resumeQuestions: Array.isArray(feedback.resumeQuestions) ? feedback.resumeQuestions : [],
       resumeQuestionsSource: feedback.resumeQuestionsSource ?? null,
       questionCount: Number(feedback.questionCount) || 5,
+      persona: feedback.persona || 'APEX',
     });
   } catch (error) {
     console.error('Error fetching session:', error);

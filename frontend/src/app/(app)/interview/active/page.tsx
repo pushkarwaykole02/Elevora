@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import ThreeAiCharacter, { type InterviewerCharacterState } from "@/components/ThreeAiCharacter";
+import PersonAiInterviewer, { type InterviewerCharacterState } from "@/components/PersonAiInterviewer";
 import InterviewPreInterviewGate from "@/components/InterviewPreInterviewGate";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useProctoring } from "@/hooks/useProctoring";
@@ -41,6 +41,7 @@ function InterviewActiveContent() {
   const [elapsed, setElapsed] = useState(0);
   const [currentQ, setCurrentQ] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [wordPulse, setWordPulse] = useState(0);
   const [role, setRole] = useState("Graduate Software Engineer");
   const [level, setLevel] = useState("junior");
   const [resumeContext, setResumeContext] = useState(false);
@@ -150,10 +151,31 @@ function InterviewActiveContent() {
     }
   }, [violations]);
 
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const speechWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopSpeaking = useCallback(() => {
+    if (speechWatchdogRef.current) {
+      clearInterval(speechWatchdogRef.current);
+      speechWatchdogRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+    utteranceRef.current = null;
+  }, []);
+
   const speakQuestion = useCallback((text: string) => {
     if (typeof window === "undefined" || !window.speechSynthesis || !audioEnabled) return;
-    window.speechSynthesis.cancel();
+    
+    // Stop any existing speech and reset state
+    stopSpeaking();
+
     const utterance = new SpeechSynthesisUtterance(text);
+    // Keep reference so Chromium garbage collector does not drop utterance mid-sentence
+    utteranceRef.current = utterance;
+
     const voices = window.speechSynthesis.getVoices();
     const voice = voices.find(
       (v) =>
@@ -162,13 +184,40 @@ function InterviewActiveContent() {
         v.name.toLowerCase().includes("daniel")
     );
     if (voice) utterance.voice = voice;
-    utterance.rate = 0.95;
-    utterance.pitch = 0.9;
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+    utterance.rate = 0.96;
+    utterance.pitch = 0.94;
+
+    utterance.onboundary = (e) => {
+      if (e.name === "word") {
+        setWordPulse((p) => p + 1);
+      }
+    };
+
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setWordPulse((p) => p + 1);
+
+      // Watchdog: poll every 100ms to immediately detect when speech stops
+      if (speechWatchdogRef.current) clearInterval(speechWatchdogRef.current);
+      speechWatchdogRef.current = setInterval(() => {
+        if (typeof window !== "undefined" && window.speechSynthesis) {
+          if (!window.speechSynthesis.speaking) {
+            stopSpeaking();
+          }
+        }
+      }, 100);
+    };
+
+    utterance.onend = () => {
+      stopSpeaking();
+    };
+
+    utterance.onerror = () => {
+      stopSpeaking();
+    };
+
     window.speechSynthesis.speak(utterance);
-  }, [audioEnabled]);
+  }, [audioEnabled, stopSpeaking]);
 
   useEffect(() => {
     if (activeQuestion && !isCodeQuestion && interviewStarted) {
@@ -179,11 +228,9 @@ function InterviewActiveContent() {
 
   useEffect(() => {
     return () => {
-      if (typeof window !== "undefined" && window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
+      stopSpeaking();
     };
-  }, []);
+  }, [stopSpeaking]);
 
   useEffect(() => {
     if (sessionId) {
@@ -364,6 +411,7 @@ function InterviewActiveContent() {
     };
 
     if (sessionId) {
+      stopSpeaking();
       try {
         const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
         const res = await fetch(`${backendUrl}/api/sessions/${sessionId}/complete`, {
@@ -385,6 +433,7 @@ function InterviewActiveContent() {
   };
 
   const handleSkipQuestion = () => {
+    stopSpeaking();
     const nextQIdx = currentQ + 1;
     const nowTime = formatTime(elapsed);
     if (nextQIdx < questions.length) {
@@ -486,23 +535,28 @@ function InterviewActiveContent() {
         {/* Left: AI Interviewer + User Camera */}
         <div className="lg:col-span-3 flex flex-col gap-3 min-h-0">
           {/* AI Interviewer */}
-          <div className="flex-1 bg-[var(--color-surface-container-low)] ghost-border rounded-2xl overflow-hidden relative flex items-center justify-center min-h-[200px]">
-            <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary)]/5 to-[var(--color-secondary)]/5" />
-            <div className="relative z-10 flex flex-col items-center gap-3 text-center p-4 w-full">
-              <div className="w-56 h-52 flex items-center justify-center">
-                <ThreeAiCharacter state={characterState} isCodeQuestion={isCodeQuestion} />
-              </div>
+          <div className="flex-1 bg-[var(--color-surface-container-low)] ghost-border rounded-2xl overflow-hidden relative flex flex-col justify-between p-4 min-h-[240px]">
+            <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary)]/5 via-transparent to-[var(--color-secondary)]/5 pointer-events-none" />
+            <div className="relative z-10 w-full flex-1 flex items-center justify-center py-1">
+              <PersonAiInterviewer
+                state={characterState}
+                micLevel={micLevel}
+                isCodeQuestion={isCodeQuestion}
+                wordPulse={wordPulse}
+              />
+            </div>
+            <div className="relative z-10 flex flex-col items-center gap-2 text-center w-full max-w-xl mx-auto mt-2">
               <div className="max-w-xl">
-                <p className="text-xs font-label text-[var(--color-secondary)] mb-1 uppercase tracking-widest">
-                  {INTERVIEWER} is asking
+                <p className="text-xs font-label text-[var(--color-secondary)] mb-1 uppercase tracking-widest flex items-center justify-center gap-2">
+                  <span>AI Interviewer is asking</span>
                   {isCodeQuestion && (
-                    <span className="ml-2 text-[var(--color-primary)]">· Code question</span>
+                    <span className="text-[var(--color-primary)]">· Code question</span>
                   )}
                   {activeQuestion?.source === "resume" && (
-                    <span className="ml-2 text-[var(--color-tertiary)]">· From your resume</span>
+                    <span className="text-[var(--color-tertiary)]">· From your resume</span>
                   )}
                 </p>
-                <p className="text-[var(--color-on-surface)] text-base font-headline font-medium leading-relaxed">
+                <p className="text-[var(--color-on-surface)] text-sm sm:text-base font-headline font-medium leading-relaxed">
                   {activeQuestion?.text}
                 </p>
               </div>

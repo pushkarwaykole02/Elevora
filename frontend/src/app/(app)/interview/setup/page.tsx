@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 
+
+
 const roles = [
   "Graduate Software Engineer",
   "Associate Frontend Developer",
@@ -147,6 +149,7 @@ export default function InterviewSetupPage() {
           domain: role,
           level: difficulty,
           questionCount,
+          persona: "APEX",
         }),
       });
 
@@ -217,6 +220,8 @@ export default function InterviewSetupPage() {
             ))}
           </div>
         </div>
+
+
 
         {/* Question Limit (Replaces Duration Slider) */}
         <div className="bg-[var(--color-surface-container-low)] ghost-border rounded-2xl p-6">
